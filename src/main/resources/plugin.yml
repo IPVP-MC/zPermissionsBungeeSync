@@ -1,0 +1,4 @@
+name: zPermissionBungeeSync
+main: org.ipvp.bungeesync.PermissionSync
+version: 1.0-SNAPSHOT
+author: SainttX

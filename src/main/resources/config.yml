@@ -1,0 +1,5 @@
+database:
+  url: "jdbc:mysql://127.0.0.1:3306/zPermissions?autoReconnect=true&useSSL=false"
+  user: "root"
+  pass: ""
+  threads: 3
