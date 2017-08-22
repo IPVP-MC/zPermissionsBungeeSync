@@ -52,7 +52,7 @@ public class PermissionSync extends Plugin implements Listener {
         try {
             updateGroupPermissionCache();
         } catch (SQLException e) {
-            getLogger().log(Level.SEVERE, "Failed to update group permission cache");
+            getLogger().log(Level.SEVERE, "Failed to update group permission cache", e);
             database.close();
             return;
         }
@@ -110,7 +110,8 @@ public class PermissionSync extends Plugin implements Listener {
                      "SELECT entities.id id, name, priority, permission, value " +
                              "FROM entities " +
                              "JOIN entries " +
-                             "ON entities.id = entries.entity_id");
+                             "ON entities.id = entries.entity_id " +
+                             "WHERE entities.is_group = 1");
              ResultSet rs = ps.executeQuery()) {
 
             Map<String, Group> cachedGroups = new ConcurrentHashMap<>();
@@ -139,7 +140,7 @@ public class PermissionSync extends Plugin implements Listener {
                         "JOIN entities e1 " +
                         "ON child_id = e1.id " +
                         "JOIN entities e2 " +
-                        "ON parent_id = e2.id");
+                        "ON inheritances.parent_id = e2.id");
              ResultSet rs = ps.executeQuery()) {
             while (rs.next()) {
                 Group child = cachedGroups.get(rs.getString("child_name"));
@@ -175,9 +176,27 @@ public class PermissionSync extends Plugin implements Listener {
                 permissions.addAll(getGroupPermissions(g));
             }
 
+            // Grab the users individual permissions
+            try (PreparedStatement psp = connection.prepareStatement(
+                    "SELECT permission " +
+                            "FROM uuidcache " +
+                            "JOIN entities " +
+                            "ON uuidcache.display_name = entities.display_name " +
+                            "JOIN entries " +
+                            "ON entries.entity_id = entities.id " +
+                            "WHERE uuidcache.uuid = ? " +
+                            "AND value = 1")) {
+                psp.setString(1, getFixedUUID(player));
+                try (ResultSet rsp = psp.executeQuery()) {
+                    while (rsp.next()) {
+                        permissions.add(rsp.getString("permission"));
+                    }
+                }
+            }
+            
             // Attempt to replace the users permissions field with new permissions
             try {
-                Field field = player.getClass().getField("permissions");
+                Field field = player.getClass().getDeclaredField("permissions");
                 field.setAccessible(true);
                 field.set(player, permissions);
             } catch (NoSuchFieldException | IllegalAccessException e) {
