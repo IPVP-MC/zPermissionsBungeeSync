@@ -9,6 +9,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.Collection;
 import java.util.HashSet;
+import java.util.LinkedList;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -171,14 +172,14 @@ public class PermissionSync extends Plugin implements Listener {
             }
 
             // Clear the players permissions
-            Collection<String> permissions = new CaseInsensitiveSet();
+            Collection<Permission> permissions = new LinkedList<>();
             for (Group g : playerGroups) {
                 permissions.addAll(getGroupPermissions(g));
             }
 
             // Grab the users individual permissions
             try (PreparedStatement psp = connection.prepareStatement(
-                    "SELECT permission " +
+                    "SELECT permission, value " +
                             "FROM uuidcache " +
                             "JOIN entities " +
                             "ON uuidcache.display_name = entities.display_name " +
@@ -189,7 +190,7 @@ public class PermissionSync extends Plugin implements Listener {
                 psp.setString(1, getFixedUUID(player));
                 try (ResultSet rsp = psp.executeQuery()) {
                     while (rsp.next()) {
-                        permissions.add(rsp.getString("permission"));
+                        permissions.add(new Permission(rsp.getString("permission"), rsp.getBoolean("value")));
                     }
                 }
             }
@@ -198,27 +199,21 @@ public class PermissionSync extends Plugin implements Listener {
             try {
                 Field field = player.getClass().getDeclaredField("permissions");
                 field.setAccessible(true);
-                field.set(player, permissions);
+                field.set(player, new CaseInsensitiveSet());
+                permissions.forEach(p -> player.setPermission(p.getPermission(), p.getValue()));
             } catch (NoSuchFieldException | IllegalAccessException e) {
                 getLogger().log(Level.SEVERE, "Failed to set permissions of " + player.getName(), e);
             }
         }
     }
     
-    private Set<String> getGroupPermissions(Group group) {
-        Set<String> permissions = new HashSet<>();
+    private Set<Permission> getGroupPermissions(Group group) {
+        Set<Permission> permissions = new HashSet<>();
         do {
-            addGroupPermissions(group, permissions);
+            permissions.addAll(group.getPermissions());
             group = group.getParent();
         } while (group != null);
         return permissions;
-    }
-    
-    private void addGroupPermissions(Group group, Set<String> permissions) {
-        group.getPermissions().stream()
-                .filter(Permission::getValue)
-                .map(Permission::getPermission)
-                .forEach(permissions::add);
     }
 
     private String getFixedUUID(ProxiedPlayer player) {
