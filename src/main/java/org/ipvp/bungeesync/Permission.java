@@ -23,7 +23,7 @@ public class Permission {
 
     @Override
     public int hashCode() {
-        return 31 * Boolean.hashCode(value) * permission.hashCode();
+        return 31 * permission.hashCode();
     }
 
     @Override
@@ -34,6 +34,6 @@ public class Permission {
             return true;
         }
         Permission other = (Permission) o;
-        return other.permission.equals(permission) && other.value == value;
+        return other.permission.equals(permission);
     }
 }
