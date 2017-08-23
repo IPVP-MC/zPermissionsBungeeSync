@@ -17,6 +17,7 @@ public class Group {
     private final String name;
     private final int priority;
     private Group parent;
+    private Set<Group> children = new HashSet<>();
     private Set<Permission> permissions = new HashSet<>();
     private Set<ProxiedPlayer> players = Collections.newSetFromMap(new ConcurrentHashMap<>());
 
@@ -44,7 +45,17 @@ public class Group {
     }
 
     public void setParent(Group parent) {
+        if (this.parent != null) {
+            this.parent.children.remove(this);
+        }
         this.parent = parent;
+        if (this.parent != null) {
+            this.parent.children.add(this);
+        }
+    }
+    
+    public Set<Group> getChildren() {
+        return Collections.unmodifiableSet(children);
     }
 
     public Set<Permission> getPermissions() {

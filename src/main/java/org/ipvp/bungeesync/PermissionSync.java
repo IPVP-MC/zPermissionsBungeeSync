@@ -69,9 +69,13 @@ public class PermissionSync extends Plugin implements Listener {
     };
     private final Consumer<Group> groupHandler = g -> {
         // Update all player permissions in the group
-        getProxy().getScheduler().schedule(this, () -> g.getPlayers().forEach(playerSyncConsumer),
-                1, TimeUnit.SECONDS);
+        getProxy().getScheduler().schedule(this, () -> refreshGroupMembers(g),1, TimeUnit.SECONDS);
     };
+    
+    private void refreshGroupMembers(Group group) {
+        group.getPlayers().forEach(playerSyncConsumer::accept);
+        group.getChildren().forEach(this::refreshGroupMembers);
+    }
 
     @Override
     public void onEnable() {
@@ -98,7 +102,7 @@ public class PermissionSync extends Plugin implements Listener {
             handlePlayerAction(UUID.fromString(in.readUTF()), p -> {
                 p.getPermissions().forEach(perm -> p.setPermission(perm, false)); // TODO: CME
                 Collection<Group> groups = playerGroups.removeAll(p);
-                groups.forEach(g -> g.getPlayers().remove(p));
+                groups.forEach(g -> g.removePlayer(p));
             });
         });
         bungeeMessageHandlers.put("PlayerSet", in -> {
@@ -116,17 +120,27 @@ public class PermissionSync extends Plugin implements Listener {
         bungeeMessageHandlers.put("PlayerRemoveGroup", playerHandler);
         
         // Register all group handlers
+        // TODO: Handling for group deletion
         bungeeMessageHandlers.put("GroupDelete", in -> {
             String group = in.readUTF();
             handleGroupAction(group, groupHandler);
             cachedGroups.remove(group);
         });
-        bungeeMessageHandlers.put("GroupSet", in -> handleGroupAction(in.readUTF(), groupHandler));
-        bungeeMessageHandlers.put("GroupUnset", in -> handleGroupAction(in.readUTF(), groupHandler));
+        bungeeMessageHandlers.put("GroupSet", in -> handleGroupAction(in.readUTF(), g -> {
+            String permission = in.readUTF();
+            g.addPermission(new Permission(permission, true));
+            groupHandler.accept(g);
+        }));
+        bungeeMessageHandlers.put("GroupUnset", in -> handleGroupAction(in.readUTF(), g -> {
+            String permission = in.readUTF();
+            g.removePermission(new Permission(permission, true));
+            groupHandler.accept(g);
+        }));
         bungeeMessageHandlers.put("GroupCreate", in -> {
             String group = in.readUTF();
             cachedGroups.put(group, new Group(-1, group, 0));
         });
+        // TODO: Properly implement GroupDeleteMembers
         bungeeMessageHandlers.put("GroupDeleteMembers", in -> handleGroupAction(in.readUTF(), groupHandler));
 
         getProxy().getPluginManager().registerListener(this, this);
@@ -238,10 +252,6 @@ public class PermissionSync extends Plugin implements Listener {
     }
 
     public void synchronizePlayerPermissions(ProxiedPlayer player) throws SQLException {
-        if (!player.getName().equals("SainttX")) {
-            return;
-        }
-        
         getLogger().info("Updating " + player.getName());
         try (Connection connection = database.getConnection();
              PreparedStatement ps = connection.prepareStatement(
@@ -259,6 +269,7 @@ public class PermissionSync extends Plugin implements Listener {
                     if (g != null) {
                         playerGroups.add(g);
                         g.addPlayer(player);
+                        getLogger().info("  Added to group " + g.getName());
                     }
                 }
             }
@@ -287,9 +298,7 @@ public class PermissionSync extends Plugin implements Listener {
                 }
             }
             
-            for (Permission permission : permissions) {
-                getLogger().info("  - " + permission.getPermission() + ": " + permission.getValue());
-            }
+            getLogger().info("  Setting " + permissions.size() + " permission(s)");
             
             // Attempt to replace the users permissions field with new permissions
             try {
@@ -335,7 +344,7 @@ public class PermissionSync extends Plugin implements Listener {
     public void onPlayerDisconnect(PlayerDisconnectEvent event) {
         ProxiedPlayer player = event.getPlayer();
         Collection<Group> groups = playerGroups.removeAll(player);
-        groups.forEach(g -> g.getPlayers().remove(player));
+        groups.forEach(g -> g.removePlayer(player));
     }
     
     @EventHandler
