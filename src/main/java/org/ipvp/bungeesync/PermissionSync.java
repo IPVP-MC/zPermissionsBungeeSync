@@ -274,6 +274,13 @@ public class PermissionSync extends Plugin implements Listener {
                 }
             }
 
+            if (playerGroups.isEmpty() && cachedGroups.containsKey("member")) {
+                Group group = cachedGroups.get("member");
+                group.addPlayer(player);
+                playerGroups.add(group);
+                getLogger().info("  Added to group member");
+            }
+
             // Clear the players permissions
             Collection<Permission> permissions = new LinkedList<>();
             for (Group g : playerGroups) {
