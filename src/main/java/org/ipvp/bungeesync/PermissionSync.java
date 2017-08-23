@@ -1,5 +1,7 @@
 package org.ipvp.bungeesync;
 
+import java.io.ByteArrayInputStream;
+import java.io.DataInputStream;
 import java.io.File;
 import java.io.IOException;
 import java.lang.reflect.Field;
@@ -8,15 +10,21 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 import java.util.logging.Level;
 
 import net.md_5.bungee.api.chat.TextComponent;
 import net.md_5.bungee.api.connection.ProxiedPlayer;
+import net.md_5.bungee.api.event.PlayerDisconnectEvent;
+import net.md_5.bungee.api.event.PluginMessageEvent;
 import net.md_5.bungee.api.event.PostLoginEvent;
 import net.md_5.bungee.api.plugin.Listener;
 import net.md_5.bungee.api.plugin.Plugin;
@@ -27,6 +35,10 @@ import net.md_5.bungee.event.EventHandler;
 import net.md_5.bungee.event.EventPriority;
 import net.md_5.bungee.util.CaseInsensitiveSet;
 
+import com.google.common.collect.HashMultimap;
+import com.google.common.collect.Multimap;
+import com.google.common.io.ByteArrayDataInput;
+import com.google.common.io.ByteStreams;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import com.zaxxer.hikari.HikariDataSource;
 
@@ -37,6 +49,29 @@ public class PermissionSync extends Plugin implements Listener {
 
     private HikariDataSource database;
     private Map<String, Group> cachedGroups;
+    private Map<String, Consumer<ByteArrayDataInput >> bungeeMessageHandlers = new HashMap<>();
+    private Multimap<ProxiedPlayer, Group> playerGroups = HashMultimap.create();
+
+    private final Consumer<ProxiedPlayer> playerSyncConsumer = p -> {
+        try {
+            synchronizePlayerPermissions(p);
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
+    };
+    private final Consumer<ByteArrayDataInput> playerHandler = in -> {
+        UUID player = UUID.fromString(in.readUTF());
+        ProxiedPlayer proxiedPlayer = getProxy().getPlayer(player);
+        if (proxiedPlayer != null) {
+            getProxy().getScheduler().schedule(this, () -> playerSyncConsumer.accept(proxiedPlayer),
+                    1, TimeUnit.SECONDS);
+        }
+    };
+    private final Consumer<Group> groupHandler = g -> {
+        // Update all player permissions in the group
+        getProxy().getScheduler().schedule(this, () -> g.getPlayers().forEach(playerSyncConsumer),
+                1, TimeUnit.SECONDS);
+    };
 
     @Override
     public void onEnable() {
@@ -57,7 +92,58 @@ public class PermissionSync extends Plugin implements Listener {
             database.close();
             return;
         }
+        
+        // Register all player handlers
+        bungeeMessageHandlers.put("PlayerDelete", in -> {
+            handlePlayerAction(UUID.fromString(in.readUTF()), p -> {
+                p.getPermissions().forEach(perm -> p.setPermission(perm, false)); // TODO: CME
+                Collection<Group> groups = playerGroups.removeAll(p);
+                groups.forEach(g -> g.getPlayers().remove(p));
+            });
+        });
+        bungeeMessageHandlers.put("PlayerSet", in -> {
+            UUID player = UUID.fromString(in.readUTF());
+            String permission = in.readUTF();
+            handlePlayerAction(player, p -> p.setPermission(permission, true));
+        });
+        bungeeMessageHandlers.put("PlayerUnset", in -> {
+            UUID player = UUID.fromString(in.readUTF());
+            String permission = in.readUTF();
+            handlePlayerAction(player, p -> p.setPermission(permission, false));
+        });
+        bungeeMessageHandlers.put("PlayerSetGroup", playerHandler);
+        bungeeMessageHandlers.put("PlayerAddGroup", playerHandler);
+        bungeeMessageHandlers.put("PlayerRemoveGroup", playerHandler);
+        
+        // Register all group handlers
+        bungeeMessageHandlers.put("GroupDelete", in -> {
+            String group = in.readUTF();
+            handleGroupAction(group, groupHandler);
+            cachedGroups.remove(group);
+        });
+        bungeeMessageHandlers.put("GroupSet", in -> handleGroupAction(in.readUTF(), groupHandler));
+        bungeeMessageHandlers.put("GroupUnset", in -> handleGroupAction(in.readUTF(), groupHandler));
+        bungeeMessageHandlers.put("GroupCreate", in -> {
+            String group = in.readUTF();
+            cachedGroups.put(group, new Group(-1, group, 0));
+        });
+        bungeeMessageHandlers.put("GroupDeleteMembers", in -> handleGroupAction(in.readUTF(), groupHandler));
+
         getProxy().getPluginManager().registerListener(this, this);
+    }
+
+    private void handlePlayerAction(UUID uuid, Consumer<ProxiedPlayer> onlinePlayerConsumer) {
+        ProxiedPlayer player = getProxy().getPlayer(uuid);
+        if (player != null) {
+            onlinePlayerConsumer.accept(player);
+        }
+    }
+
+    private void handleGroupAction(String group, Consumer<Group> groupConsumer) {
+        Group g = cachedGroups.get(group);
+        if (g != null) {
+            groupConsumer.accept(g);
+        }
     }
 
     /* (non-Javadoc)
@@ -152,6 +238,11 @@ public class PermissionSync extends Plugin implements Listener {
     }
 
     public void synchronizePlayerPermissions(ProxiedPlayer player) throws SQLException {
+        if (!player.getName().equals("SainttX")) {
+            return;
+        }
+        
+        getLogger().info("Updating " + player.getName());
         try (Connection connection = database.getConnection();
              PreparedStatement ps = connection.prepareStatement(
                      "SELECT name " +
@@ -167,6 +258,7 @@ public class PermissionSync extends Plugin implements Listener {
                     Group g = cachedGroups.get(group);
                     if (g != null) {
                         playerGroups.add(g);
+                        g.addPlayer(player);
                     }
                 }
             }
@@ -193,6 +285,10 @@ public class PermissionSync extends Plugin implements Listener {
                         permissions.add(new Permission(rsp.getString("permission"), rsp.getBoolean("value")));
                     }
                 }
+            }
+            
+            for (Permission permission : permissions) {
+                getLogger().info("  - " + permission.getPermission() + ": " + permission.getValue());
             }
             
             // Attempt to replace the users permissions field with new permissions
@@ -231,5 +327,36 @@ public class PermissionSync extends Plugin implements Listener {
                 getLogger().log(Level.SEVERE, "Failed to synchronize permissions of " + player.getName(), e);
             }
         });
+    }
+    
+    @EventHandler
+    public void onPlayerDisconnect(PlayerDisconnectEvent event) {
+        ProxiedPlayer player = event.getPlayer();
+        Collection<Group> groups = playerGroups.removeAll(player);
+        groups.forEach(g -> g.getPlayers().remove(player));
+    }
+    
+    @EventHandler
+    public void onPluginMessage(PluginMessageEvent event) {
+        if (!event.getTag().equals("BungeeCord")) {
+            return;
+        }
+
+        ByteArrayDataInput input = ByteStreams.newDataInput(event.getData());
+        String sub = input.readUTF();
+        
+        if (!sub.equals("zPermissions")) {
+            return;
+        }
+        
+        String action = input.readUTF();
+        getLogger().info("Handling zPermissions message action: " + action);
+
+        short len = input.readShort();
+        byte[] msgbytes = new byte[len];
+        input.readFully(msgbytes);
+
+        ByteArrayDataInput in = ByteStreams.newDataInput(msgbytes);
+        bungeeMessageHandlers.get(action).accept(in);
     }
 }

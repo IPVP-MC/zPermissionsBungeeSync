@@ -4,6 +4,9 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+
+import net.md_5.bungee.api.connection.ProxiedPlayer;
 
 /**
  * Represents a zPermissions group entity
@@ -15,6 +18,7 @@ public class Group {
     private final int priority;
     private Group parent;
     private Set<Permission> permissions = new HashSet<>();
+    private Set<ProxiedPlayer> players = Collections.newSetFromMap(new ConcurrentHashMap<>());
 
     public Group(int id, String name, int priority) {
         this.id = id;
@@ -52,6 +56,18 @@ public class Group {
 
     public void removePermission(Permission permission) {
         permissions.remove(permission);
+    }
+    
+    public void addPlayer(ProxiedPlayer player) {
+        players.add(player);
+    }
+    
+    public void removePlayer(ProxiedPlayer player) {
+        players.remove(player);
+    }
+    
+    public Set<ProxiedPlayer> getPlayers() {
+        return Collections.unmodifiableSet(players);
     }
 
     @Override
