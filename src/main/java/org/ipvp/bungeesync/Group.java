@@ -24,6 +24,7 @@ public class Group {
         this.id = id;
         this.name = name;
         this.priority = priority;
+        permissions.add(new Permission("group." + name, true));
     }
 
     public int getId() {
