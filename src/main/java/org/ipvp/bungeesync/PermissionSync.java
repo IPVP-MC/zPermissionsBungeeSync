@@ -1,7 +1,5 @@
 package org.ipvp.bungeesync;
 
-import java.io.ByteArrayInputStream;
-import java.io.DataInputStream;
 import java.io.File;
 import java.io.IOException;
 import java.lang.reflect.Field;
@@ -34,6 +32,8 @@ import net.md_5.bungee.config.YamlConfiguration;
 import net.md_5.bungee.event.EventHandler;
 import net.md_5.bungee.event.EventPriority;
 import net.md_5.bungee.util.CaseInsensitiveSet;
+
+import org.ipvp.bungeesync.event.RecalculatePlayerEvent;
 
 import com.google.common.collect.HashMultimap;
 import com.google.common.collect.Multimap;
@@ -169,7 +169,6 @@ public class PermissionSync extends Plugin implements Listener {
         return config;
     }
 
-
     /* (non-Javadoc)
      * Creates the HikariCP connection pool instance from configuration
      */
@@ -300,6 +299,8 @@ public class PermissionSync extends Plugin implements Listener {
             } catch (NoSuchFieldException | IllegalAccessException e) {
                 getLogger().log(Level.SEVERE, "Failed to set permissions of " + player.getName(), e);
             }
+            
+            getProxy().getPluginManager().callEvent(new RecalculatePlayerEvent(player));
         }
     }
     
