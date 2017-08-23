@@ -130,6 +130,7 @@ public class PermissionSync extends Plugin implements Listener {
         bungeeMessageHandlers.put("GroupDeleteMembers", in -> handleGroupAction(in.readUTF(), groupHandler));
 
         getProxy().getPluginManager().registerListener(this, this);
+        getProxy().getPlayers().forEach(playerSyncConsumer);
     }
 
     private void handlePlayerAction(UUID uuid, Consumer<ProxiedPlayer> onlinePlayerConsumer) {
