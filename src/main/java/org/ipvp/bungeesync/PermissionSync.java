@@ -21,10 +21,7 @@ import java.util.logging.Level;
 
 import net.md_5.bungee.api.chat.TextComponent;
 import net.md_5.bungee.api.connection.ProxiedPlayer;
-import net.md_5.bungee.api.event.PlayerDisconnectEvent;
-import net.md_5.bungee.api.event.PluginMessageEvent;
-import net.md_5.bungee.api.event.PostLoginEvent;
-import net.md_5.bungee.api.event.PreLoginEvent;
+import net.md_5.bungee.api.event.*;
 import net.md_5.bungee.api.plugin.Listener;
 import net.md_5.bungee.api.plugin.Plugin;
 import net.md_5.bungee.config.Configuration;
@@ -347,7 +344,7 @@ public class PermissionSync extends Plugin implements Listener {
     }
 
     @EventHandler(priority = EventPriority.HIGHEST)
-    public void preLoginEvent(PreLoginEvent event) {
+    public void preLoginEvent(LoginEvent event) {
         if (event.isCancelled()) {
             return;
         }
