@@ -1,9 +1,6 @@
 package org.ipvp.bungeesync;
 
-import java.util.Collections;
-import java.util.HashSet;
-import java.util.Optional;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
 import net.md_5.bungee.api.connection.ProxiedPlayer;
@@ -19,7 +16,7 @@ public class Group {
     private Group parent;
     private Set<Group> children = new HashSet<>();
     private Set<Permission> permissions = new HashSet<>();
-    private Set<ProxiedPlayer> players = Collections.newSetFromMap(new ConcurrentHashMap<>());
+    private Set<UUID> players = Collections.newSetFromMap(new ConcurrentHashMap<>());
 
     public Group(int id, String name, int priority) {
         this.id = id;
@@ -70,15 +67,15 @@ public class Group {
         permissions.remove(permission);
     }
     
-    public void addPlayer(ProxiedPlayer player) {
+    public void addPlayer(UUID player) {
         players.add(player);
     }
     
-    public void removePlayer(ProxiedPlayer player) {
+    public void removePlayer(UUID player) {
         players.remove(player);
     }
     
-    public Set<ProxiedPlayer> getPlayers() {
+    public Set<UUID> getPlayers() {
         return Collections.unmodifiableSet(players);
     }
 

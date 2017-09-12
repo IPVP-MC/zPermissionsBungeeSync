@@ -24,6 +24,7 @@ import net.md_5.bungee.api.connection.ProxiedPlayer;
 import net.md_5.bungee.api.event.PlayerDisconnectEvent;
 import net.md_5.bungee.api.event.PluginMessageEvent;
 import net.md_5.bungee.api.event.PostLoginEvent;
+import net.md_5.bungee.api.event.PreLoginEvent;
 import net.md_5.bungee.api.plugin.Listener;
 import net.md_5.bungee.api.plugin.Plugin;
 import net.md_5.bungee.config.Configuration;
@@ -49,12 +50,13 @@ public class PermissionSync extends Plugin implements Listener {
 
     private HikariDataSource database;
     private Map<String, Group> cachedGroups;
-    private Map<String, Consumer<ByteArrayDataInput >> bungeeMessageHandlers = new HashMap<>();
+    private Map<String, Consumer<ByteArrayDataInput>> bungeeMessageHandlers = new HashMap<>();
     private Multimap<ProxiedPlayer, Group> playerGroups = HashMultimap.create();
+    private Map<UUID, Collection<Permission>> preLoadedPermissions = new ConcurrentHashMap<>();
 
     private final Consumer<ProxiedPlayer> playerSyncConsumer = p -> {
         try {
-            synchronizePlayerPermissions(p);
+            recalculatePlayerPermissions(p);
         } catch (SQLException e) {
             throw new RuntimeException(e);
         }
@@ -73,7 +75,7 @@ public class PermissionSync extends Plugin implements Listener {
     };
     
     private void refreshGroupMembers(Group group) {
-        group.getPlayers().forEach(playerSyncConsumer::accept);
+        group.getPlayers().stream().map(getProxy()::getPlayer).forEach(playerSyncConsumer);
         group.getChildren().forEach(this::refreshGroupMembers);
     }
 
@@ -102,7 +104,7 @@ public class PermissionSync extends Plugin implements Listener {
             handlePlayerAction(UUID.fromString(in.readUTF()), p -> {
                 p.getPermissions().forEach(perm -> p.setPermission(perm, false)); // TODO: CME
                 Collection<Group> groups = playerGroups.removeAll(p);
-                groups.forEach(g -> g.removePlayer(p));
+                groups.forEach(g -> g.removePlayer(p.getUniqueId()));
             });
         });
         bungeeMessageHandlers.put("PlayerSet", in -> {
@@ -251,8 +253,32 @@ public class PermissionSync extends Plugin implements Listener {
         }
     }
 
-    public void synchronizePlayerPermissions(ProxiedPlayer player) throws SQLException {
-        getLogger().info("Updating " + player.getName());
+    /**
+     * Recalculates the permissions of a player
+     *
+     * @param player Player to recalculate
+     * @throws SQLException If getting permissions from database fails
+     */
+    public void recalculatePlayerPermissions(ProxiedPlayer player) throws SQLException {
+        Collection<Permission> permissions = getPlayerPermissions(player.getUniqueId());
+        updatePlayerPermissions(player, permissions);
+    }
+
+    private void updatePlayerPermissions(ProxiedPlayer player, Collection<Permission> permissions) {
+        // Attempt to replace the users permissions field with new permissions
+        try {
+            Field field = player.getClass().getDeclaredField("permissions");
+            field.setAccessible(true);
+            field.set(player, new CaseInsensitiveSet());
+            permissions.forEach(p -> player.setPermission(p.getPermission(), p.getValue()));
+        } catch (NoSuchFieldException | IllegalAccessException e) {
+            getLogger().log(Level.SEVERE, "Failed to set permissions of " + player.getName(), e);
+        }
+
+        getProxy().getPluginManager().callEvent(new RecalculatePlayerEvent(player));
+    }
+
+    public Collection<Permission> getPlayerPermissions(UUID uuid) throws SQLException {
         try (Connection connection = database.getConnection();
              PreparedStatement ps = connection.prepareStatement(
                      "SELECT name " +
@@ -260,7 +286,7 @@ public class PermissionSync extends Plugin implements Listener {
                              "JOIN entities " +
                              "ON entities.id = memberships.group_id " +
                              "WHERE member = ?")) {
-            ps.setString(1, getFixedUUID(player));
+            ps.setString(1, uuid.toString().replace("-", ""));
             Set<Group> playerGroups = new HashSet<>();
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
@@ -268,17 +294,15 @@ public class PermissionSync extends Plugin implements Listener {
                     Group g = cachedGroups.get(group);
                     if (g != null) {
                         playerGroups.add(g);
-                        g.addPlayer(player);
-                        getLogger().info("  Added to group " + g.getName());
+                        g.addPlayer(uuid);
                     }
                 }
             }
 
             if (playerGroups.isEmpty() && cachedGroups.containsKey("member")) {
                 Group group = cachedGroups.get("member");
-                group.addPlayer(player);
+                group.addPlayer(uuid);
                 playerGroups.add(group);
-                getLogger().info("  Added to group member");
             }
 
             // Clear the players permissions
@@ -297,27 +321,15 @@ public class PermissionSync extends Plugin implements Listener {
                             "ON entries.entity_id = entities.id " +
                             "WHERE uuidcache.uuid = ? " +
                             "AND value = 1")) {
-                psp.setString(1, getFixedUUID(player));
+                psp.setString(1, uuid.toString().replace("-", ""));
                 try (ResultSet rsp = psp.executeQuery()) {
                     while (rsp.next()) {
                         permissions.add(new Permission(rsp.getString("permission"), rsp.getBoolean("value")));
                     }
                 }
             }
-            
-            getLogger().info("  Setting " + permissions.size() + " permission(s)");
-            
-            // Attempt to replace the users permissions field with new permissions
-            try {
-                Field field = player.getClass().getDeclaredField("permissions");
-                field.setAccessible(true);
-                field.set(player, new CaseInsensitiveSet());
-                permissions.forEach(p -> player.setPermission(p.getPermission(), p.getValue()));
-            } catch (NoSuchFieldException | IllegalAccessException e) {
-                getLogger().log(Level.SEVERE, "Failed to set permissions of " + player.getName(), e);
-            }
-            
-            getProxy().getPluginManager().callEvent(new RecalculatePlayerEvent(player));
+
+            return permissions;
         }
     }
     
@@ -335,23 +347,35 @@ public class PermissionSync extends Plugin implements Listener {
     }
 
     @EventHandler(priority = EventPriority.HIGHEST)
+    public void preLoginEvent(PreLoginEvent event) {
+        if (event.isCancelled()) {
+            return;
+        }
+        event.registerIntent(this);
+        try {
+            Collection<Permission> loadedPermissions = getPlayerPermissions(event.getConnection().getUniqueId());
+            preLoadedPermissions.put(event.getConnection().getUniqueId(), loadedPermissions);
+        } catch (SQLException e) {
+            getLogger().log(Level.SEVERE, "failed to get permissions of " + event.getConnection().getUniqueId());
+            event.setCancelled(true);
+            event.setCancelReason("An error occurred when loading your permissions. Please try again later.");
+        } finally {
+            event.completeIntent(this);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.LOWEST)
     public void onPlayerLogin(PostLoginEvent event) {
         ProxiedPlayer player = event.getPlayer();
-        getProxy().getScheduler().runAsync(this, () -> {
-            try {
-                synchronizePlayerPermissions(player);
-            } catch (SQLException e) {
-                player.disconnect(TextComponent.fromLegacyText("Failed to synchronize permissions"));
-                getLogger().log(Level.SEVERE, "Failed to synchronize permissions of " + player.getName(), e);
-            }
-        });
+        Collection<Permission> loaded = preLoadedPermissions.remove(player.getUniqueId());
+        updatePlayerPermissions(player, loaded);
     }
     
     @EventHandler
     public void onPlayerDisconnect(PlayerDisconnectEvent event) {
         ProxiedPlayer player = event.getPlayer();
         Collection<Group> groups = playerGroups.removeAll(player);
-        groups.forEach(g -> g.removePlayer(player));
+        groups.forEach(g -> g.removePlayer(player.getUniqueId()));
     }
     
     @EventHandler
