@@ -355,7 +355,7 @@ public class PermissionSync extends Plugin implements Listener {
         try {
             Collection<Permission> loadedPermissions = getPlayerPermissions(event.getConnection().getUniqueId());
             preLoadedPermissions.put(event.getConnection().getUniqueId(), loadedPermissions);
-        } catch (SQLException e) {
+        } catch (Exception e) {
             getLogger().log(Level.SEVERE, "failed to get permissions of " + event.getConnection().getUniqueId());
             event.setCancelled(true);
             event.setCancelReason("An error occurred when loading your permissions. Please try again later.");
